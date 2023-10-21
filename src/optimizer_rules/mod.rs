@@ -235,10 +235,6 @@ mod tests {
             .optimize(&logical_plan, &OptimizerContext::new(), |_, _| {})
             .unwrap();
 
-        dbg!(&output);
-
-        panic!();
-
         if let LogicalPlan::Projection(proj) = output {
             if let LogicalPlan::Extension(ext) = proj.input.deref() {
                 assert_eq!(ext.node.name(), "PosDelta");
