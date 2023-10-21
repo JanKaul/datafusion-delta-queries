@@ -156,6 +156,28 @@ impl OptimizerRule for PosDelta {
                             schema: join.schema.clone(),
                         })))
                     }
+                    LogicalPlan::Union(union) => {
+                        let inputs = union
+                            .inputs
+                            .iter()
+                            .map(|input| {
+                                Ok(self
+                                    .try_optimize(
+                                        &PosDeltaNode {
+                                            input: input.clone(),
+                                        }
+                                        .into_logical_plan(),
+                                        config,
+                                    )?
+                                    .map(Arc::new)
+                                    .unwrap_or(input.clone()))
+                            })
+                            .collect::<datafusion_common::Result<_>>()?;
+                        Ok(Some(LogicalPlan::Union(Union {
+                            inputs,
+                            schema: union.schema.clone(),
+                        })))
+                    }
                     LogicalPlan::TableScan(scan) => Ok(Some(
                         PosDeltaScanNode {
                             input: LogicalPlan::TableScan(scan.clone()),
@@ -421,6 +443,63 @@ mod tests {
             }
         } else {
             panic!("Node is not a projection.")
+        }
+    }
+
+    #[tokio::test]
+    async fn test_union() {
+        let ctx = SessionContext::new();
+
+        let users1_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new("age", DataType::Int32, true),
+        ]));
+
+        let users2_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new("age", DataType::Int32, true),
+        ]));
+
+        let table1 = Arc::new(MemTable::try_new(users1_schema, vec![vec![]]).unwrap());
+        let table2 = Arc::new(MemTable::try_new(users2_schema, vec![vec![]]).unwrap());
+
+        ctx.register_table("public.users1", table1).unwrap();
+        ctx.register_table("public.users2", table2).unwrap();
+
+        let sql =
+            "select id, name from public.users1 union all select id, name from public.users2;";
+
+        let logical_plan = ctx.state().create_logical_plan(sql).await.unwrap();
+
+        let delta_plan = PosDeltaNode::new(logical_plan).into_logical_plan();
+
+        let optimizer = Optimizer::with_rules(vec![Arc::new(PosDelta {})]);
+
+        let output = optimizer
+            .optimize(&delta_plan, &OptimizerContext::new(), |_, _| {})
+            .unwrap();
+
+        dbg!(&output);
+
+        if let LogicalPlan::Union(union) = output {
+            if let LogicalPlan::Projection(proj) = union.inputs[0].deref() {
+                if let LogicalPlan::Extension(ext) = proj.input.deref() {
+                    assert_eq!(ext.node.name(), "PosDeltaScan")
+                }
+            } else {
+                panic!("Node is not a projection.")
+            }
+            if let LogicalPlan::Projection(proj) = union.inputs[1].deref() {
+                if let LogicalPlan::Extension(ext) = proj.input.deref() {
+                    assert_eq!(ext.node.name(), "PosDeltaScan")
+                }
+            } else {
+                panic!("Node is not a projection.")
+            }
+        } else {
+            panic!("Node is not a filter.")
         }
     }
 }
