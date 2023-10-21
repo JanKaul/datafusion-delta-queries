@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion_expr::{CrossJoin, Filter, LogicalPlan, Projection, Union};
+use datafusion_expr::{CrossJoin, Filter, Join, LogicalPlan, Projection, Union};
 use datafusion_optimizer::OptimizerRule;
 
 use crate::delta_node::{PosDeltaNode, PosDeltaScanNode};
@@ -86,6 +86,66 @@ impl OptimizerRule for PosDelta {
                             left: delta_left.clone(),
                             right: join.right.clone(),
                             schema: join.schema.clone(),
+                        });
+                        Ok(Some(LogicalPlan::Union(Union {
+                            inputs: vec![
+                                Arc::new(delta_delta),
+                                Arc::new(left_delta),
+                                Arc::new(right_delta),
+                            ],
+                            schema: join.schema.clone(),
+                        })))
+                    }
+                    LogicalPlan::Join(join) => {
+                        let delta_left = self
+                            .try_optimize(
+                                &PosDeltaNode {
+                                    input: join.left.clone(),
+                                }
+                                .into_logical_plan(),
+                                config,
+                            )?
+                            .map(Arc::new)
+                            .unwrap_or(join.left.clone());
+                        let delta_right = self
+                            .try_optimize(
+                                &PosDeltaNode {
+                                    input: join.right.clone(),
+                                }
+                                .into_logical_plan(),
+                                config,
+                            )?
+                            .map(Arc::new)
+                            .unwrap_or(join.right.clone());
+                        let delta_delta = LogicalPlan::Join(Join {
+                            left: delta_left.clone(),
+                            right: delta_right.clone(),
+                            schema: join.schema.clone(),
+                            on: join.on.clone(),
+                            filter: join.filter.clone(),
+                            join_type: join.join_type.clone(),
+                            join_constraint: join.join_constraint.clone(),
+                            null_equals_null: join.null_equals_null.clone(),
+                        });
+                        let left_delta = LogicalPlan::Join(Join {
+                            left: join.left.clone(),
+                            right: delta_right.clone(),
+                            schema: join.schema.clone(),
+                            on: join.on.clone(),
+                            filter: join.filter.clone(),
+                            join_type: join.join_type.clone(),
+                            join_constraint: join.join_constraint.clone(),
+                            null_equals_null: join.null_equals_null.clone(),
+                        });
+                        let right_delta = LogicalPlan::Join(Join {
+                            left: delta_left.clone(),
+                            right: join.right.clone(),
+                            schema: join.schema.clone(),
+                            on: join.on.clone(),
+                            filter: join.filter.clone(),
+                            join_type: join.join_type.clone(),
+                            join_constraint: join.join_constraint.clone(),
+                            null_equals_null: join.null_equals_null.clone(),
                         });
                         Ok(Some(LogicalPlan::Union(Union {
                             inputs: vec![
@@ -266,6 +326,86 @@ mod tests {
                     panic!("Node is not a CrossJoin.")
                 }
                 if let LogicalPlan::CrossJoin(join) = union.inputs[2].deref() {
+                    if let (LogicalPlan::Extension(left), LogicalPlan::TableScan(_)) =
+                        (join.left.deref(), join.right.deref())
+                    {
+                        assert_eq!(left.node.name(), "PosDeltaScan");
+                    } else {
+                        panic!("Node is not a PosDeltaScan.")
+                    }
+                } else {
+                    panic!("Node is not a CrossJoin.")
+                }
+            } else {
+                panic!("Node is not a filter.")
+            }
+        } else {
+            panic!("Node is not a projection.")
+        }
+    }
+
+    #[tokio::test]
+    async fn test_join() {
+        let ctx = SessionContext::new();
+
+        let users_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new("age", DataType::Int32, true),
+            Field::new("address", DataType::Utf8, false),
+        ]));
+
+        let homes_schema = Arc::new(Schema::new(vec![
+            Field::new("address", DataType::Utf8, false),
+            Field::new("size", DataType::Int32, true),
+        ]));
+
+        let users_table = Arc::new(MemTable::try_new(users_schema, vec![vec![]]).unwrap());
+        let homes_table = Arc::new(MemTable::try_new(homes_schema, vec![vec![]]).unwrap());
+
+        ctx.register_table("public.users", users_table).unwrap();
+        ctx.register_table("public.homes", homes_table).unwrap();
+
+        let sql = "select users.name, homes.size from public.users join public.homes on users.address = homes.address;";
+
+        let logical_plan = ctx.state().create_logical_plan(sql).await.unwrap();
+
+        let delta_plan = PosDeltaNode::new(logical_plan).into_logical_plan();
+
+        let optimizer = Optimizer::with_rules(vec![Arc::new(PosDelta {})]);
+
+        let output = optimizer
+            .optimize(&delta_plan, &OptimizerContext::new(), |_, _| {})
+            .unwrap();
+
+        dbg!(&output);
+
+        if let LogicalPlan::Projection(proj) = output {
+            if let LogicalPlan::Union(union) = proj.input.deref() {
+                if let LogicalPlan::Join(join) = union.inputs[0].deref() {
+                    if let (LogicalPlan::Extension(left), LogicalPlan::Extension(right)) =
+                        (join.left.deref(), join.right.deref())
+                    {
+                        assert_eq!(left.node.name(), "PosDeltaScan");
+                        assert_eq!(right.node.name(), "PosDeltaScan")
+                    } else {
+                        panic!("Node is not a PosDeltaScan.")
+                    }
+                } else {
+                    panic!("Node is not a CrossJoin.")
+                }
+                if let LogicalPlan::Join(join) = union.inputs[1].deref() {
+                    if let (LogicalPlan::TableScan(_), LogicalPlan::Extension(right)) =
+                        (join.left.deref(), join.right.deref())
+                    {
+                        assert_eq!(right.node.name(), "PosDeltaScan")
+                    } else {
+                        panic!("Node is not a PosDeltaScan.")
+                    }
+                } else {
+                    panic!("Node is not a CrossJoin.")
+                }
+                if let LogicalPlan::Join(join) = union.inputs[2].deref() {
                     if let (LogicalPlan::Extension(left), LogicalPlan::TableScan(_)) =
                         (join.left.deref(), join.right.deref())
                     {
