@@ -142,10 +142,7 @@ mod tests {
 
         let logical_plan = ctx.state().create_logical_plan(sql).await.unwrap();
 
-        let delta_plan = PosDeltaNode {
-            input: Arc::new(logical_plan),
-        }
-        .into_logical_plan();
+        let delta_plan = PosDeltaNode::new(logical_plan).into_logical_plan();
 
         let optimizer = Optimizer::with_rules(vec![Arc::new(PosDelta {})]);
 
@@ -182,10 +179,7 @@ mod tests {
 
         let logical_plan = ctx.state().create_logical_plan(sql).await.unwrap();
 
-        let delta_plan = PosDeltaNode {
-            input: Arc::new(logical_plan),
-        }
-        .into_logical_plan();
+        let delta_plan = PosDeltaNode::new(logical_plan).into_logical_plan();
 
         let optimizer = Optimizer::with_rules(vec![Arc::new(PosDelta {})]);
 
@@ -236,10 +230,7 @@ mod tests {
 
         let logical_plan = ctx.state().create_logical_plan(sql).await.unwrap();
 
-        let delta_plan = PosDeltaNode {
-            input: Arc::new(logical_plan),
-        }
-        .into_logical_plan();
+        let delta_plan = PosDeltaNode::new(logical_plan).into_logical_plan();
 
         let optimizer = Optimizer::with_rules(vec![Arc::new(PosDelta {})]);
 

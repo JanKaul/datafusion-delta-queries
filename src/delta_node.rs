@@ -46,6 +46,12 @@ impl UserDefinedLogicalNodeCore for PosDeltaNode {
 }
 
 impl PosDeltaNode {
+    pub fn new(plan: LogicalPlan) -> Self {
+        Self {
+            input: Arc::new(plan),
+        }
+    }
+
     pub(crate) fn into_logical_plan(self) -> LogicalPlan {
         LogicalPlan::Extension(Extension {
             node: Arc::new(self),
