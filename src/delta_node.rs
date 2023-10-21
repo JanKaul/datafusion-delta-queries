@@ -55,7 +55,7 @@ impl PosDeltaNode {
 
 #[derive(PartialEq, Eq, Hash)]
 pub struct PosDeltaScanNode {
-    input: LogicalPlan,
+    pub input: LogicalPlan,
 }
 
 impl Debug for PosDeltaScanNode {
@@ -91,5 +91,13 @@ impl UserDefinedLogicalNodeCore for PosDeltaScanNode {
         Self {
             input: inputs[0].clone(),
         }
+    }
+}
+
+impl PosDeltaScanNode {
+    pub(crate) fn into_logical_plan(self) -> LogicalPlan {
+        LogicalPlan::Extension(Extension {
+            node: Arc::new(self),
+        })
     }
 }

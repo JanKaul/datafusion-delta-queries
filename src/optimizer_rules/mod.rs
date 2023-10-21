@@ -3,7 +3,7 @@ use std::sync::Arc;
 use datafusion_expr::{LogicalPlan, Projection};
 use datafusion_optimizer::OptimizerRule;
 
-use crate::delta_node::PosDeltaNode;
+use crate::delta_node::{PosDeltaNode, PosDeltaScanNode};
 
 pub struct PosDelta {}
 
@@ -14,21 +14,30 @@ impl OptimizerRule for PosDelta {
     fn try_optimize(
         &self,
         plan: &datafusion_expr::LogicalPlan,
-        _config: &dyn datafusion_optimizer::OptimizerConfig,
+        config: &dyn datafusion_optimizer::OptimizerConfig,
     ) -> datafusion_common::Result<Option<datafusion_expr::LogicalPlan>> {
         match plan {
             LogicalPlan::Projection(proj) => {
-                Ok(Some(LogicalPlan::Projection(Projection::try_new(
-                    proj.expr.clone(),
-                    Arc::new(
-                        PosDeltaNode {
-                            input: proj.input.clone(),
-                        }
-                        .into_logical_plan(),
-                    ),
-                )?)))
+                if &format!("{}", proj.input.display()) != "PosDelta" {
+                    let input = self
+                        .try_optimize(&proj.input, config)?
+                        .map(Arc::new)
+                        .unwrap_or(proj.input.clone());
+                    Ok(Some(LogicalPlan::Projection(Projection::try_new(
+                        proj.expr.clone(),
+                        Arc::new(PosDeltaNode { input }.into_logical_plan()),
+                    )?)))
+                } else {
+                    Ok(None)
+                }
             }
-            x => Ok(Some(x.clone())),
+            LogicalPlan::TableScan(scan) => Ok(Some(
+                PosDeltaScanNode {
+                    input: LogicalPlan::TableScan(scan.clone()),
+                }
+                .into_logical_plan(),
+            )),
+            _ => Ok(None),
         }
     }
 }
@@ -70,7 +79,10 @@ mod tests {
 
         if let LogicalPlan::Projection(proj) = output {
             if let LogicalPlan::Extension(ext) = proj.input.deref() {
-                assert_eq!(ext.node.name(), "PosDelta")
+                assert_eq!(ext.node.name(), "PosDelta");
+                if let LogicalPlan::Extension(ext) = ext.node.inputs()[0] {
+                    assert_eq!(ext.node.name(), "PosDeltaScan")
+                }
             } else {
                 panic!("Node is not an extension.")
             }
