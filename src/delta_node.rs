@@ -1,12 +1,12 @@
 use core::fmt;
-use std::fmt::Debug;
+use std::{fmt::Debug, sync::Arc};
 
 use datafusion_common::DFSchemaRef;
-use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
+use datafusion_expr::{Expr, Extension, LogicalPlan, UserDefinedLogicalNodeCore};
 
 #[derive(PartialEq, Eq, Hash)]
-struct PosDeltaNode {
-    input: LogicalPlan,
+pub struct PosDeltaNode {
+    pub input: Arc<LogicalPlan>,
 }
 
 impl Debug for PosDeltaNode {
@@ -40,13 +40,21 @@ impl UserDefinedLogicalNodeCore for PosDeltaNode {
         assert_eq!(inputs.len(), 1, "input size inconsistent");
         assert_eq!(exprs.len(), 0, "expression size inconsistent");
         Self {
-            input: inputs[0].clone(),
+            input: Arc::new(inputs[0].clone()),
         }
     }
 }
 
+impl PosDeltaNode {
+    pub(crate) fn into_logical_plan(self) -> LogicalPlan {
+        LogicalPlan::Extension(Extension {
+            node: Arc::new(self),
+        })
+    }
+}
+
 #[derive(PartialEq, Eq, Hash)]
-struct PosDeltaScanNode {
+pub struct PosDeltaScanNode {
     input: LogicalPlan,
 }
 
