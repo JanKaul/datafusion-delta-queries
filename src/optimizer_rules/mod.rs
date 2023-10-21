@@ -16,91 +16,103 @@ impl OptimizerRule for PosDelta {
         plan: &datafusion_expr::LogicalPlan,
         config: &dyn datafusion_optimizer::OptimizerConfig,
     ) -> datafusion_common::Result<Option<datafusion_expr::LogicalPlan>> {
-        match plan {
-            LogicalPlan::Projection(proj) => {
-                if &format!("{}", proj.input.display()) != "PosDelta" {
-                    let input = self
-                        .try_optimize(&proj.input, config)?
-                        .map(Arc::new)
-                        .unwrap_or(proj.input.clone());
-                    Ok(Some(LogicalPlan::Projection(Projection::try_new(
-                        proj.expr.clone(),
-                        Arc::new(PosDeltaNode { input }.into_logical_plan()),
-                    )?)))
-                } else {
-                    Ok(None)
-                }
-            }
-            LogicalPlan::Filter(filter) => {
-                if &format!("{}", filter.input.display()) != "PosDelta" {
-                    let input = self
-                        .try_optimize(&filter.input, config)?
-                        .map(Arc::new)
-                        .unwrap_or(filter.input.clone());
-                    Ok(Some(LogicalPlan::Filter(Filter::try_new(
-                        filter.predicate.clone(),
-                        Arc::new(PosDeltaNode { input }.into_logical_plan()),
-                    )?)))
-                } else {
-                    Ok(None)
-                }
-            }
-            LogicalPlan::CrossJoin(join) => {
-                if &format!("{}", join.left.display()) != "PosDelta"
-                    || &format!("{}", join.right.display()) != "PosDelta"
-                {
-                    let delta_left = Arc::new(
-                        PosDeltaNode {
-                            input: self
-                                .try_optimize(&join.left, config)?
-                                .map(Arc::new)
-                                .unwrap_or(join.left.clone()),
+        if let LogicalPlan::Extension(ext) = plan {
+            if ext.node.name() == "PosDelta" {
+                match ext.node.inputs()[0] {
+                    LogicalPlan::Projection(proj) => {
+                        let input = self
+                            .try_optimize(
+                                &PosDeltaNode {
+                                    input: proj.input.clone(),
+                                }
+                                .into_logical_plan(),
+                                config,
+                            )?
+                            .map(Arc::new)
+                            .unwrap_or(proj.input.clone());
+                        Ok(Some(LogicalPlan::Projection(Projection::try_new(
+                            proj.expr.clone(),
+                            input,
+                        )?)))
+                    }
+                    LogicalPlan::Filter(filter) => {
+                        let input = self
+                            .try_optimize(
+                                &PosDeltaNode {
+                                    input: filter.input.clone(),
+                                }
+                                .into_logical_plan(),
+                                config,
+                            )?
+                            .map(Arc::new)
+                            .unwrap_or(filter.input.clone());
+                        Ok(Some(LogicalPlan::Filter(Filter::try_new(
+                            filter.predicate.clone(),
+                            input,
+                        )?)))
+                    }
+                    // LogicalPlan::CrossJoin(join) => {
+                    //     if &format!("{}", join.left.display()) != "PosDelta"
+                    //         || &format!("{}", join.right.display()) != "PosDelta"
+                    //     {
+                    //         let delta_left = Arc::new(
+                    //             PosDeltaNode {
+                    //                 input: self
+                    //                     .try_optimize(&join.left, config)?
+                    //                     .map(Arc::new)
+                    //                     .unwrap_or(join.left.clone()),
+                    //             }
+                    //             .into_logical_plan(),
+                    //         );
+                    //         let delta_right = Arc::new(
+                    //             PosDeltaNode {
+                    //                 input: self
+                    //                     .try_optimize(&join.right, config)?
+                    //                     .map(Arc::new)
+                    //                     .unwrap_or(join.right.clone()),
+                    //             }
+                    //             .into_logical_plan(),
+                    //         );
+                    //         let delta_delta = LogicalPlan::CrossJoin(CrossJoin {
+                    //             left: delta_left.clone(),
+                    //             right: delta_right.clone(),
+                    //             schema: join.schema.clone(),
+                    //         });
+                    //         let left_delta = LogicalPlan::CrossJoin(CrossJoin {
+                    //             left: join.left.clone(),
+                    //             right: delta_right.clone(),
+                    //             schema: join.schema.clone(),
+                    //         });
+                    //         let right_delta = LogicalPlan::CrossJoin(CrossJoin {
+                    //             left: delta_left.clone(),
+                    //             right: join.right.clone(),
+                    //             schema: join.schema.clone(),
+                    //         });
+                    //         Ok(Some(LogicalPlan::Union(Union {
+                    //             inputs: vec![
+                    //                 Arc::new(delta_delta),
+                    //                 Arc::new(left_delta),
+                    //                 Arc::new(right_delta),
+                    //             ],
+                    //             schema: join.schema.clone(),
+                    //         })))
+                    //     } else {
+                    //         Ok(None)
+                    //     }
+                    // }
+                    LogicalPlan::TableScan(scan) => Ok(Some(
+                        PosDeltaScanNode {
+                            input: LogicalPlan::TableScan(scan.clone()),
                         }
                         .into_logical_plan(),
-                    );
-                    let delta_right = Arc::new(
-                        PosDeltaNode {
-                            input: self
-                                .try_optimize(&join.right, config)?
-                                .map(Arc::new)
-                                .unwrap_or(join.right.clone()),
-                        }
-                        .into_logical_plan(),
-                    );
-                    let delta_delta = LogicalPlan::CrossJoin(CrossJoin {
-                        left: delta_left.clone(),
-                        right: delta_right.clone(),
-                        schema: join.schema.clone(),
-                    });
-                    let left_delta = LogicalPlan::CrossJoin(CrossJoin {
-                        left: join.left.clone(),
-                        right: delta_right.clone(),
-                        schema: join.schema.clone(),
-                    });
-                    let right_delta = LogicalPlan::CrossJoin(CrossJoin {
-                        left: delta_left.clone(),
-                        right: join.right.clone(),
-                        schema: join.schema.clone(),
-                    });
-                    Ok(Some(LogicalPlan::Union(Union {
-                        inputs: vec![
-                            Arc::new(delta_delta),
-                            Arc::new(left_delta),
-                            Arc::new(right_delta),
-                        ],
-                        schema: join.schema.clone(),
-                    })))
-                } else {
-                    Ok(None)
+                    )),
+                    _ => Ok(None),
                 }
+            } else {
+                Ok(None)
             }
-            LogicalPlan::TableScan(scan) => Ok(Some(
-                PosDeltaScanNode {
-                    input: LogicalPlan::TableScan(scan.clone()),
-                }
-                .into_logical_plan(),
-            )),
-            _ => Ok(None),
+        } else {
+            Ok(None)
         }
     }
 }
@@ -111,10 +123,10 @@ mod tests {
 
     use arrow_schema::{DataType, Field, Schema};
     use datafusion::{datasource::MemTable, prelude::SessionContext};
-    use datafusion_expr::LogicalPlan;
+    use datafusion_expr::{Extension, LogicalPlan};
     use datafusion_optimizer::{optimizer::Optimizer, OptimizerContext};
 
-    use crate::optimizer_rules::PosDelta;
+    use crate::{delta_node::PosDeltaNode, optimizer_rules::PosDelta};
 
     #[tokio::test]
     async fn test_projection() {
@@ -134,20 +146,22 @@ mod tests {
 
         let logical_plan = ctx.state().create_logical_plan(sql).await.unwrap();
 
+        let delta_plan = PosDeltaNode {
+            input: Arc::new(logical_plan),
+        }
+        .into_logical_plan();
+
         let optimizer = Optimizer::with_rules(vec![Arc::new(PosDelta {})]);
 
         let output = optimizer
-            .optimize(&logical_plan, &OptimizerContext::new(), |_, _| {})
+            .optimize(&delta_plan, &OptimizerContext::new(), |_, _| {})
             .unwrap();
+
+        dbg!(&output);
 
         if let LogicalPlan::Projection(proj) = output {
             if let LogicalPlan::Extension(ext) = proj.input.deref() {
-                assert_eq!(ext.node.name(), "PosDelta");
-                if let LogicalPlan::Extension(ext) = ext.node.inputs()[0] {
-                    assert_eq!(ext.node.name(), "PosDeltaScan")
-                }
-            } else {
-                panic!("Node is not a PosDelta.")
+                assert_eq!(ext.node.name(), "PosDeltaScan")
             }
         } else {
             panic!("Node is not a projection.")
@@ -172,31 +186,28 @@ mod tests {
 
         let logical_plan = ctx.state().create_logical_plan(sql).await.unwrap();
 
+        let delta_plan = PosDeltaNode {
+            input: Arc::new(logical_plan),
+        }
+        .into_logical_plan();
+
         let optimizer = Optimizer::with_rules(vec![Arc::new(PosDelta {})]);
 
         let output = optimizer
-            .optimize(&logical_plan, &OptimizerContext::new(), |_, _| {})
+            .optimize(&delta_plan, &OptimizerContext::new(), |_, _| {})
             .unwrap();
 
+        dbg!(&output);
+
         if let LogicalPlan::Projection(proj) = output {
-            if let LogicalPlan::Extension(ext) = proj.input.deref() {
-                assert_eq!(ext.node.name(), "PosDelta");
-                if let LogicalPlan::Filter(filter) = ext.node.inputs()[0] {
-                    if let LogicalPlan::Extension(ext) = filter.input.deref() {
-                        assert_eq!(ext.node.name(), "PosDelta");
-                        if let LogicalPlan::Extension(ext) = ext.node.inputs()[0] {
-                            assert_eq!(ext.node.name(), "PosDeltaScan")
-                        } else {
-                            panic!("Node is not a PosDeltaScan.")
-                        }
-                    } else {
-                        panic!("Node is not a PosDelta.")
-                    }
+            if let LogicalPlan::Filter(filter) = proj.input.deref() {
+                if let LogicalPlan::Extension(ext) = filter.input.deref() {
+                    assert_eq!(ext.node.name(), "PosDeltaScan")
                 } else {
-                    panic!("Node is not a filter.")
+                    panic!("Node is not a PosDeltaScan.")
                 }
             } else {
-                panic!("Node is not a PosDelta.")
+                panic!("Node is not a filter.")
             }
         } else {
             panic!("Node is not a projection.")
@@ -229,10 +240,15 @@ mod tests {
 
         let logical_plan = ctx.state().create_logical_plan(sql).await.unwrap();
 
+        let delta_plan = PosDeltaNode {
+            input: Arc::new(logical_plan),
+        }
+        .into_logical_plan();
+
         let optimizer = Optimizer::with_rules(vec![Arc::new(PosDelta {})]);
 
         let output = optimizer
-            .optimize(&logical_plan, &OptimizerContext::new(), |_, _| {})
+            .optimize(&delta_plan, &OptimizerContext::new(), |_, _| {})
             .unwrap();
 
         if let LogicalPlan::Projection(proj) = output {
