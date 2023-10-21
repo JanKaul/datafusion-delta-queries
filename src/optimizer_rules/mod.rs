@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion_expr::{LogicalPlan, Projection};
+use datafusion_expr::{Filter, LogicalPlan, Projection};
 use datafusion_optimizer::OptimizerRule;
 
 use crate::delta_node::{PosDeltaNode, PosDeltaScanNode};
@@ -25,6 +25,20 @@ impl OptimizerRule for PosDelta {
                         .unwrap_or(proj.input.clone());
                     Ok(Some(LogicalPlan::Projection(Projection::try_new(
                         proj.expr.clone(),
+                        Arc::new(PosDeltaNode { input }.into_logical_plan()),
+                    )?)))
+                } else {
+                    Ok(None)
+                }
+            }
+            LogicalPlan::Filter(filter) => {
+                if &format!("{}", filter.input.display()) != "PosDelta" {
+                    let input = self
+                        .try_optimize(&filter.input, config)?
+                        .map(Arc::new)
+                        .unwrap_or(filter.input.clone());
+                    Ok(Some(LogicalPlan::Filter(Filter::try_new(
+                        filter.predicate.clone(),
                         Arc::new(PosDeltaNode { input }.into_logical_plan()),
                     )?)))
                 } else {
@@ -84,7 +98,56 @@ mod tests {
                     assert_eq!(ext.node.name(), "PosDeltaScan")
                 }
             } else {
-                panic!("Node is not an extension.")
+                panic!("Node is not a PosDelta.")
+            }
+        } else {
+            panic!("Node is not a projection.")
+        }
+    }
+
+    #[tokio::test]
+    async fn test_filter() {
+        let ctx = SessionContext::new();
+
+        let users_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new("age", DataType::Int32, true),
+        ]));
+
+        let table = Arc::new(MemTable::try_new(users_schema, vec![vec![]]).unwrap());
+
+        ctx.register_table("public.users", table).unwrap();
+
+        let sql = "select * from public.users where id = 1;";
+
+        let logical_plan = ctx.state().create_logical_plan(sql).await.unwrap();
+
+        let optimizer = Optimizer::with_rules(vec![Arc::new(PosDelta {})]);
+
+        let output = optimizer
+            .optimize(&logical_plan, &OptimizerContext::new(), |_, _| {})
+            .unwrap();
+
+        if let LogicalPlan::Projection(proj) = output {
+            if let LogicalPlan::Extension(ext) = proj.input.deref() {
+                assert_eq!(ext.node.name(), "PosDelta");
+                if let LogicalPlan::Filter(filter) = ext.node.inputs()[0] {
+                    if let LogicalPlan::Extension(ext) = filter.input.deref() {
+                        assert_eq!(ext.node.name(), "PosDelta");
+                        if let LogicalPlan::Extension(ext) = ext.node.inputs()[0] {
+                            assert_eq!(ext.node.name(), "PosDeltaScan")
+                        } else {
+                            panic!("Node is not a PosDeltaScan.")
+                        }
+                    } else {
+                        panic!("Node is not a PosDelta.")
+                    }
+                } else {
+                    panic!("Node is not a filter.")
+                }
+            } else {
+                panic!("Node is not a PosDelta.")
             }
         } else {
             panic!("Node is not a projection.")
